@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Convex Hull</title>
+<style>
+
+button {
+	background: black;
+	padding: 5px 10px 6px;
+	color: #fff;
+	font-weight: bold;
+	-moz-border-radius: 5px;
+	-webkit-border-radius: 5px;
+	-moz-box-shadow: 0 1px 3px #999;
+	-webkit-box-shadow: 0 1px 3px #999;
+}
+button:disabled {
+	color: gray;
+	background: darkgray;
+}
+
+circle {
+  fill: white;
+  stroke: black;
+  stroke-width: 1.5px;
+}
+
+</style>
+<body>
+	<div class="container" style="text-align: center;">
+	<div>
+		<h4><i>Convex hull (Graham scan algorithm) animation</i></h4><button id="replay_button">Replay</button>
+		<span style="display: none;" id="iterations"></span>
+	</div>
+	<svg></svg>
+</body>
+<script src="https://d3js.org/d3.v4.min.js"></script>
+<script src="https://d3js.org/d3-selection-multi.v1.min.js"></script>
+<script>
+
+var width = 560,
+    height = 400;
+
+var svg = d3.select("svg").attrs({width: width, height: height});
+
+var line = d3.line(),
+    circle_layer = svg.append('g'),
+    interm_layer = svg.append('g').attrs({fill: 'transparent', 'stroke': 'darkblue'}),
+    result_layer = svg.append('g').attrs({fill: 'green', 'fill-opacity': 0.2, 'stroke': 'green', 'stroke-width': '2px'}),
+    current_timeout;
+
+d3.select('#replay_button')
+    .on('click', function(){
+        clearTimeout(current_timeout);
+        draw_convex();
+    });
+
+function draw_random_points(){
+    var randomX = d3.randomNormal(width / 2, 60),
+        randomY = d3.randomNormal(height / 2, 60),
+        vertices = d3.range(100).map(_ => [randomX(), randomY()]);
+
+    var circle = circle_layer.selectAll("circle")
+        .data(vertices)
+        .enter()
+        .append("circle")
+        .attrs((d,i) => ({
+          r: 3, id: 'vertice_' + i, transform: "translate(" + d + ")"
+        }));
+    return vertices;
+}
+
+class GrahamScanAnimate {
+    constructor(points=[]){
+        let pts = [];
+        this.anchor = {x: Infinity, y: Infinity};
+        if(points.length > 0){
+            let min_y, min_x, pt, idx;
+            for(let i=0; i < points.length; i++){
+                pt = points[i];
+                if(this.anchor.y > pt[1] || this.anchor.y == pt[1] && this.anchor.x > pt[0]){
+                    this.anchor.x = pt[0];
+                    this.anchor.y = pt[1];
+                    idx = i;
+                }
+                pts.push({x: pt[0], y: pt[1]});
+            }
+            pts.splice(pts.indexOf(this.anchor), 1);
+            this.animated = [{type: 'anchor', data: {idx: idx, pt: this.anchor}}];
+            this.pts = pts;
+        } else {
+            this.pts = [];
+            this.animated = [];
+        }
+    }
+
+    checkccw(p0, p1, p2) {
+        let dif_angle,
+            cw_angle = findPolarAngle(p0, p1, this.reverse),
+            ccw_angle = findPolarAngle(p0, p2, this.reverse);
+
+        if (cw_angle > ccw_angle) {
+            dif_angle = cw_angle - ccw_angle;
+            return !(dif_angle > 180);
+        } else if (cw_angle < ccw_angle) {
+            dif_angle = ccw_angle - cw_angle;
+            return (dif_angle > 180);
+        }
+        return true;
+    }
+
+    getConvexHull() {
+        var hull_points = [],
+            pts = this.pts,
+            n_pts = pts.length;
+        if (n_pts < 2) return;
+        this.reverse = this.pts.every(point => point.x < 0 && point.y < 0);
+        this.pts.sort((a, b) => {
+            let polarA = findPolarAngle(this.anchor, a, this.reverse),
+                polarB = findPolarAngle(this.anchor, b, this.reverse);
+            return polarA < polarB ? -1 : polarA > polarB ? 1 : 0;
+        });
+        if (n_pts < 3) {
+            pts.unshift(this.anchor);
+            return pts;
+        }
+        let p0, p1, p2;
+        hull_points.push(pts.shift(), pts.shift());
+        while (true) {
+            hull_points.push(pts.shift());
+            this.animated.push({type: 'scan', data: hull_points.filter(p => p).map(pt => [pt.x, pt.y])});
+            p0 = hull_points[hull_points.length - 3];
+            p1 = hull_points[hull_points.length - 2];
+            p2 = hull_points[hull_points.length - 1];
+
+            if (this.checkccw(p0, p1, p2)) {
+                hull_points.splice(hull_points.length - 2, 1);
+                this.animated.push({type: 'remove'});
+                this.animated.push({type: 'scan', data: hull_points.filter(p => p).map(pt => [pt.x, pt.y])});
+            }
+
+            if (pts.length == 0) {
+                if (n_pts == hull_points.length) {
+                    let ap = this.anchor;
+                    hull_points = hull_points.filter(p => !!p);
+                    if (!hull_points.some(p => p.x == ap.x && p.y == ap.y)) {
+                        hull_points.unshift(ap);
+                    }
+                    this.animated.push({type: 'result', data: hull_points.map(pt => [pt.x, pt.y]).concat([[ap.x, ap.y]])});
+                    return [hull_points, this.animated];
+                }
+                pts = hull_points;
+                n_pts = pts.length;
+                hull_points = [];
+                hull_points.push(pts.shift(), pts.shift());
+            }
+        }
+    }
+};
+
+function findPolarAngle(a, b, reverse) {
+    var one_rad = 57.295779513082,
+        deltaX, deltaY;
+    if (!a || !b) return 0;
+    deltaX = (b.x - a.x);
+    deltaY = (b.y - a.y);
+    if (deltaX == 0 && deltaY == 0) return 0;
+    var angle = Math.atan2(deltaY, deltaX) * one_rad;
+    if (reverse && angle <= 0){
+        angle += 360;
+    }
+    if (!reverse && angle >= 0) {
+        angle += 360;
+    }
+    return angle;
+};
+
+function draw_convex(){
+    interm_layer.selectAll('path').remove();
+    result_layer.selectAll('path').remove();
+    circle_layer.selectAll('circle').remove();
+    let vertices = draw_random_points();
+    let Convex = new GrahamScanAnimate(vertices),
+        [result, steps] = Convex.getConvexHull(),
+        animation_duration = 20,
+        // stroke_w = 0.8,
+        stroke_w = 1,
+        i = 0;
+
+    let anim_next = function(){
+        if(i == steps.length) return;
+        let type = steps[i].type;
+        if(type == "anchor"){
+            svg.select('#vertice_' + steps[i].data.idx).style('fill', 'red');
+        } else if (type == "scan"){
+            interm_layer.append('path')
+                .datum(steps[i].data)
+                .attr('d', line)
+                .style('stroke-width', stroke_w + 'px');
+        } else if (type == "remove"){
+            // stroke_w = stroke_w * 1.015;
+            interm_layer.selectAll('path').transition().remove();
+        } else if (type == "result"){
+            setTimeout(_ => { interm_layer.selectAll('path').transition().remove() }, 5);
+            svg.selectAll('circle').style('fill', 'transparent');
+            result_layer.append('path')
+                .datum(steps[i].data)
+                .attr('d', line)
+                .style('stroke-width', stroke_w + 1.5 + 'px');
+        }
+        i++;
+        current_timeout = setTimeout(anim_next, animation_duration);
+    };
+    anim_next();
+}
+
+draw_convex();
+</script>
